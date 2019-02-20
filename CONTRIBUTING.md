@@ -13,7 +13,8 @@ Use the issues tracker for:
 
 Please **do not** use the issue tracker for personal support requests nor feature requests. Support requests should be sent to:
 
-* [the phoenix-talk mailing list](http://groups.google.com/group/phoenix-talk)
+* [the phoenix-talk mailing list](http://groups.google.com/group/phoenix-talk) (closed in favor of forum, but archive is still online)
+* [The Phoenix subforum on the Elixir forum](https://elixirforum.com/c/phoenix-forum)
 * **[#elixir-lang](irc://chat.freenode.net/elixir-lang)** IRC channel on [chat.freenode.net](http://www.freenode.net/)
 
 Development issues can be discussed on [the phoenix-core mailing list](http://groups.google.com/group/phoenix-core).
@@ -24,8 +25,9 @@ making it easier for developers to [contribute to Phoenix](#pull-requests).
 
 ## Bug reports
 
-A bug is a _demonstrable problem_ that is caused by the code in the repository.
-Good bug reports are extremely helpful - thank you!
+A bug is either a _demonstrable problem_ that is caused by the code in the repository,
+or indicate missing, unclear, or misleading documentation. Good bug reports are extremely 
+helpful - thank you!
 
 Guidelines for bug reports:
 
@@ -126,7 +128,7 @@ accurate comments, etc.) and don't forget to add your own tests and
 documentation. When working with git, we recommend the following process
 in order to craft an excellent pull request:
 
-1. [Fork](http://help.github.com/fork-a-repo/) the project, clone your fork,
+1. [Fork](https://help.github.com/articles/fork-a-repo/) the project, clone your fork,
    and configure the remotes:
 
    ```bash
@@ -160,7 +162,7 @@ in order to craft an excellent pull request:
 4. Commit your changes in logical chunks. Keep your commit messages organized,
    with a short description in the first line and more detailed information on
    the following lines. Feel free to use Git's
-   [interactive rebase](https://help.github.com/articles/interactive-rebase)
+   [interactive rebase](https://help.github.com/articles/about-git-rebase/)
    feature to tidy up your commits before making them public.
 
 5. Make sure all the tests are still passing.
@@ -175,7 +177,7 @@ in order to craft an excellent pull request:
    git push origin <topic-branch-name>
    ```
 
-7. [Open a Pull Request](https://help.github.com/articles/using-pull-requests/)
+7. [Open a Pull Request](https://help.github.com/articles/about-pull-requests/)
     with a clear title and description.
 
 8. If you haven't updated your pull request for a while, you should consider
@@ -193,3 +195,30 @@ in order to craft an excellent pull request:
    ```
 
 Thank you for your contributions!
+
+## Guides
+
+These Guides aim to be inclusive. We use "we" and "our" instead of "you" and
+"your" to foster this sense of inclusion.
+
+Ideally there is something for everybody in each guide, from beginner to expert.
+This is hard, maybe impossible. When we need to compromise, we do so on behalf
+of beginning users because expert users have more tools at their disposal to
+help themselves.
+
+The general pattern we use for presenting information is to first introduce a
+small, discreet topic, then write a small amount of code to demonstrate the
+concept, then verify that the code worked.
+
+In this way, we build from small, easily digestible concepts into more complex
+ones. The shorter this cycle is, as long as the information is still clear and
+complete, the better.
+
+For formatting the guides:
+
+- We use the "elixir" code fence for all module code.
+- We use the "console" code fence for iex and shell commands.
+- We use the "html" code fence for html templates, even if there is elixir code
+  in the template.
+- We use backticks for filenames and directory paths.
+- We use backticks for module names, function names, and variable names.

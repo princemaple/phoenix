@@ -28,6 +28,14 @@ defmodule Phoenix.PresenceTest do
     {:ok, topic: to_string(config.test)}
   end
 
+  test "defines child_spec/1" do
+    assert DefaultPresence.child_spec([]) == %{
+      id: DefaultPresence,
+      start: {DefaultPresence, :start_link, [[]]},
+      type: :supervisor
+    }
+  end
+
   test "default fetch/2 returns pass-through data", config do
     presences = %{"u1" => %{metas: [%{name: "u1", phx_ref: "ref"}]}}
     assert DefaultPresence.fetch(config.topic, presences) == presences
@@ -47,6 +55,20 @@ defmodule Phoenix.PresenceTest do
     assert {:ok, _} = MyPresence.track(self(), config.topic, 1, %{name: "u1"})
     assert %{"1" => %{extra: "extra", metas: [%{name: "u1", phx_ref: _}]}} =
            MyPresence.list(config.topic)
+  end
+
+  test "get_by_key/2 returns metadata for key", config do
+    pid2 = spawn(fn -> :timer.sleep(:infinity) end)
+    pid3 = spawn(fn -> :timer.sleep(:infinity) end)
+    assert MyPresence.get_by_key(config.topic, 1) == []
+    assert {:ok, _} = MyPresence.track(self(), config.topic, 1, %{name: "u1"})
+    assert {:ok, _} = MyPresence.track(pid2, config.topic, 1, %{name: "u1.2"})
+    assert {:ok, _} = MyPresence.track(pid3, config.topic, 2, %{name: "u1.2"})
+    assert %{extra: "extra", metas: [%{name: "u1", phx_ref: _}, %{name: "u1.2", phx_ref: _}]} =
+           MyPresence.get_by_key(config.topic, 1)
+
+    assert MyPresence.get_by_key(config.topic, "another_key") == []
+    assert MyPresence.get_by_key("another_topic", 2) == []
   end
 
   test "handle_diff broadcasts events with default fetched data",

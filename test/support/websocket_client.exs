@@ -1,19 +1,20 @@
 defmodule Phoenix.Integration.WebsocketClient do
-  alias Poison, as: JSON
+  alias Phoenix.Socket.Message
 
   @doc """
   Starts the WebSocket server for given ws URL. Received Socket.Message's
   are forwarded to the sender pid
   """
-  def start_link(sender, url, headers \\ []) do
-    :crypto.start
-    :ssl.start
-    :websocket_client.start_link(String.to_char_list(url), __MODULE__, [sender],
-                                 extra_headers: headers)
-  end
+  def start_link(sender, url, serializer, headers \\ []) do
+    :crypto.start()
+    :ssl.start()
 
-  def init([sender], _conn_state) do
-    {:ok, %{sender: sender, ref: 0}}
+    :websocket_client.start_link(
+      String.to_charlist(url),
+      __MODULE__,
+      [sender, serializer],
+      extra_headers: headers
+    )
   end
 
   @doc """
@@ -24,35 +25,17 @@ defmodule Phoenix.Integration.WebsocketClient do
   end
 
   @doc """
-  Receives JSON encoded Socket.Message from remote WS endpoint and
-  forwards message to client sender process
-  """
-  def websocket_handle({:text, msg}, _conn_state, state) do
-    send state.sender, Phoenix.Transports.WebSocketSerializer.decode!(msg, opcode: :text)
-    {:ok, state}
-  end
-
-  @doc """
-  Sends JSON encoded Socket.Message to remote WS endpoint
-  """
-  def websocket_info({:send, msg}, _conn_state, state) do
-    msg = Map.put(msg, :ref, to_string(state.ref + 1))
-    {:reply, {:text, json!(msg)}, put_in(state, [:ref], state.ref + 1)}
-  end
-
-  def websocket_info(:close, _conn_state, _state) do
-    {:close, <<>>, "done"}
-  end
-
-  def websocket_terminate(_reason, _conn_state, _state) do
-    :ok
-  end
-
-  @doc """
-  Sends an event to the WebSocket server per the Message protocol
+  Sends an event to the WebSocket server per the message protocol.
   """
   def send_event(server_pid, topic, event, msg) do
-    send server_pid, {:send, %{topic: topic, event: event, payload: msg}}
+    send(server_pid, {:send, %Message{topic: topic, event: event, payload: msg}})
+  end
+
+  @doc """
+  Sends a low-level text message to the client.
+  """
+  def send_message(server_pid, msg) do
+    send(server_pid, {:send, msg})
   end
 
   @doc """
@@ -76,5 +59,43 @@ defmodule Phoenix.Integration.WebsocketClient do
     send_event(server_pid, topic, "phx_leave", msg)
   end
 
-  defp json!(map), do: JSON.encode!(map)
+  @doc false
+  def init([sender, serializer], _conn_state) do
+    {:ok, %{sender: sender, join_ref: 1, ref: 0, serializer: serializer}}
+  end
+
+  @doc false
+  def websocket_handle({:text, msg}, _conn_state, %{serializer: :noop} = state) do
+    send(state.sender, {:text, msg})
+    {:ok, state}
+  end
+
+  def websocket_handle({:text, msg}, _conn_state, state) do
+    send(state.sender, state.serializer.decode!(msg, opcode: :text))
+    {:ok, state}
+  end
+
+  @doc false
+  def websocket_info({:send, msg}, _conn_state, %{serializer: :noop} = state) do
+    {:reply, {:text, msg}, state}
+  end
+
+  def websocket_info({:send, %Message{} = msg}, _conn_state, state) do
+    msg = Map.merge(msg, %{ref: to_string(state.ref + 1), join_ref: to_string(state.join_ref)})
+    {:reply, {:text, encode!(msg, state)}, put_in(state, [:ref], state.ref + 1)}
+  end
+
+  def websocket_info(:close, _conn_state, _state) do
+    {:close, <<>>, "done"}
+  end
+
+  @doc false
+  def websocket_terminate(_reason, _conn_state, _state) do
+    :ok
+  end
+
+  defp encode!(map, state) do
+    {:socket_push, :text, chardata} = state.serializer.encode!(map)
+    IO.chardata_to_string(chardata)
+  end
 end

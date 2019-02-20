@@ -15,17 +15,39 @@ defmodule Phoenix.Logger do
   case sensitive.
 
   Phoenix's default is `["password"]`.
+
+  Phoenix can filter all parameters by default and selectively keep
+  parameters. This can be configured like so:
+
+      config :phoenix, :filter_parameters, {:keep, ["id", "order"]}
+
+  With the configuration above, Phoenix will filter all parameters,
+  except those that match exactly `id` or `order`. If a kept parameter
+  matches, all parameters nested under that one will also be kept.
   """
   require Logger
   import Phoenix.Controller
 
+  def phoenix_error_render(:start, _compile, %{log_level: false}), do: :ok
+  def phoenix_error_render(:start, _, %{log_level: level} = runtime) do
+    %{status: status, kind: kind, reason: reason} = runtime
+
+    Logger.log(level, fn ->
+      ["Converted #{kind} #{error_banner(kind, reason)} to #{status} response"]
+    end)
+    :ok
+  end
+  def phoenix_error_render(:stop, _time_diff, :ok), do: :ok
+
+  defp error_banner(:error, %type{}), do: inspect(type)
+  defp error_banner(_kind, reason), do: inspect(reason)
 
   def phoenix_controller_call(:start, _compile, %{log_level: false}), do: :ok
   def phoenix_controller_call(:start, %{module: module}, %{log_level: level, conn: conn}) do
     Logger.log level, fn ->
       controller = inspect(module)
       action = conn |> action_name() |> Atom.to_string()
-      ["Processing by ", controller, ?., action, ?/, ?2, ?\n,
+      ["Processing with ", controller, ?., action, ?/, ?2, ?\n,
         "  Parameters: ", params(conn.params), ?\n,
         "  Pipelines: ", inspect(conn.private[:phoenix_pipelines])]
     end
@@ -38,39 +60,99 @@ defmodule Phoenix.Logger do
   end
   def phoenix_channel_join(:stop, _compile, :ok), do: :ok
 
-  defp log_join("phoenix" <> _, _socket, _params), do: :ok
-  defp log_join(topic, socket, params) do
-    filtered_params = filter_values(params)
-    Logger.info fn ->
-      "JOIN #{topic} to #{inspect(socket.channel)}\n" <>
-      "  Transport:  #{inspect socket.transport}\n" <>
-      "  Parameters: #{inspect filtered_params}"
-    end
+  def phoenix_channel_receive(:start, _compile, meta) do
+    %{socket: socket, params: params, event: event} = meta
+    log_receive(socket.topic, event, socket, params)
   end
+  def phoenix_channel_receive(:stop, _compile, :ok), do: :ok
+
+  def phoenix_socket_connect(:start, _compile, %{log: false}), do: :ok
+  def phoenix_socket_connect(:start, _compile, %{log: level} = meta) do
+    %{
+      transport: transport,
+      params: params,
+      connect_info: connect_info,
+      user_socket: user_socket,
+    } = meta
+
+    Logger.log(level, fn ->
+      "CONNECT #{inspect(user_socket)}\n" <>
+      "  Transport: #{inspect(transport)}\n" <>
+      "  Connect Info: #{inspect(connect_info)}\n" <>
+      "  Parameters: #{inspect(filter_values(params))}"
+    end)
+  end
+  def phoenix_socket_connect(:stop, _compile, _), do: :ok
 
   @doc false
   def filter_values(values, params \\ Application.get_env(:phoenix, :filter_parameters))
-  def filter_values(%{__struct__: mod} = struct, _filter_params) when is_atom(mod) do
+  def filter_values(values, {:discard, params}), do: discard_values(values, params)
+  def filter_values(values, {:keep, params}), do: keep_values(values, params)
+  def filter_values(values, params), do: discard_values(values, params)
+
+  defp discard_values(%{__struct__: mod} = struct, _params) when is_atom(mod) do
     struct
   end
-  def filter_values(%{} = map, filter_params) do
+  defp discard_values(%{} = map, params) do
     Enum.into map, %{}, fn {k, v} ->
-      if is_binary(k) and String.contains?(k, filter_params) do
+      if is_binary(k) and String.contains?(k, params) do
         {k, "[FILTERED]"}
       else
-        {k, filter_values(v, filter_params)}
+        {k, discard_values(v, params)}
       end
     end
   end
-  def filter_values([_|_] = list, filter_params) do
-    Enum.map(list, &filter_values(&1, filter_params))
+  defp discard_values([_|_] = list, params) do
+    Enum.map(list, &discard_values(&1, params))
   end
-  def filter_values(other, _filter_params), do: other
+  defp discard_values(other, _params), do: other
+
+  defp keep_values(%{__struct__: mod}, _params) when is_atom(mod), do: "[FILTERED]"
+  defp keep_values(%{} = map, params) do
+    Enum.into map, %{}, fn {k, v} ->
+      if is_binary(k) and k in params do
+        {k, discard_values(v, [])}
+      else
+        {k, keep_values(v, params)}
+      end
+    end
+  end
+  defp keep_values([_|_] = list, params) do
+    Enum.map(list, &keep_values(&1, params))
+  end
+  defp keep_values(_other, _params), do: "[FILTERED]"
 
   defp params(%Plug.Conn.Unfetched{}), do: "[UNFETCHED]"
   defp params(params) do
     params
     |> filter_values()
     |> inspect()
+  end
+
+  defp log_receive("phoenix" <> _, _event, _socket, _params), do: :ok
+  defp log_receive(topic, event, socket, params) do
+    channel_log(:log_handle_in, socket, fn ->
+      "INCOMING #{inspect event} on #{inspect topic} to #{inspect(socket.channel)}\n" <>
+      "  Parameters: #{inspect filter_values(params)}"
+    end)
+  end
+
+  defp log_join("phoenix" <> _, _socket, _params), do: :ok
+  defp log_join(topic, socket, params) do
+    channel_log(:log_join, socket, fn ->
+      "JOIN #{inspect topic} to #{inspect(socket.channel)}\n" <>
+      "  Transport:  #{inspect socket.transport}\n" <>
+      "  Serializer: #{inspect socket.serializer}\n" <>
+      "  Parameters: #{inspect filter_values(params)}"
+    end)
+  end
+
+  defp channel_log(log_option, %Phoenix.Socket{private: private}, message_or_func) do
+    case Map.fetch(private, log_option) do
+      {:ok, false} -> :ok
+      {:ok, level} -> Logger.log(level, message_or_func)
+    end
+
+    :ok
   end
 end

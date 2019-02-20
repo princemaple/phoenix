@@ -4,55 +4,11 @@ defmodule Phoenix.Router.HelpersTest do
 
   alias Phoenix.Router.Helpers
 
-  ## Unit tests
-
-  test "defhelper with :identifiers" do
-    route = build(:match, :get, "/foo/:bar", nil, Hello, :world, "hello_world")
-
-    assert extract_defhelper(route, 0) == String.strip """
-    def(hello_world_path(conn_or_endpoint, :world, bar)) do
-      hello_world_path(conn_or_endpoint, :world, bar, [])
-    end
-    """
-
-    assert extract_defhelper(route, 1) == String.strip """
-    def(hello_world_path(conn_or_endpoint, :world, bar, params)) do
-      path(conn_or_endpoint, segments(("" <> "/foo") <> "/" <> URI.encode(to_param(bar), &URI.char_unreserved?/1), params, ["bar"]))
-    end
-    """
-  end
-
-  test "defhelper with *identifiers" do
-    route = build(:match, :get, "/foo/*bar", nil, Hello, :world, "hello_world")
-
-    assert extract_defhelper(route, 0) == String.strip """
-    def(hello_world_path(conn_or_endpoint, :world, bar)) do
-      hello_world_path(conn_or_endpoint, :world, bar, [])
-    end
-    """
-
-    assert extract_defhelper(route, 1) == String.strip """
-    def(hello_world_path(conn_or_endpoint, :world, bar, params)) do
-      path(conn_or_endpoint, segments(("" <> "/foo") <> "/" <> Enum.map_join(bar, "/", fn s -> URI.encode(s, &URI.char_unreserved?/1) end), params, ["bar"]))
-    end
-    """
-  end
-
-  defp build(kind, verb, path, host, controller, action, helper) do
-    Phoenix.Router.Route.build(kind, verb, path, host, controller, action, helper, [], %{}, %{})
-  end
-
-  defp extract_defhelper(route, pos) do
-    {:__block__, _, block} = Helpers.defhelper(route, Phoenix.Router.Route.exprs(route))
-    Enum.fetch!(block, pos) |> Macro.to_string()
-  end
-
-  ## Integration tests
-
   defmodule Router do
     use Phoenix.Router
 
     get "/posts/top", PostController, :top, as: :top
+    get "/posts/bottom/:order/:count", PostController, :bottom, as: :bottom
     get "/posts/:id", PostController, :show
     get "/posts/file/*file", PostController, :file
     get "/posts/skip", PostController, :skip, as: nil
@@ -80,6 +36,9 @@ defmodule Phoenix.Router.HelpersTest do
     end
 
     get "/", PageController, :root, as: :page
+    get "/products/:id", ProductController, :show
+    get "/products/:id/:sort", ProductController, :show
+    get "/products/:id/:sort/:page", ProductController, :show
   end
 
   # Emulate regular endpoint functions
@@ -136,6 +95,20 @@ defmodule Phoenix.Router.HelpersTest do
     end
   end
 
+  test "url helper shows an error if an id is accidentally passed" do
+    error_suggestion = ~r/bottom_path\(conn, :bottom, order, count, page: 5, per_page: 10\)/
+
+    assert_raise ArgumentError, error_suggestion, fn ->
+      Helpers.bottom_path(__MODULE__, :bottom, :asc, 8, {:not, :enumerable})
+    end
+
+    error_suggestion = ~r/top_path\(conn, :top, page: 5, per_page: 10\)/
+
+    assert_raise ArgumentError, error_suggestion, fn ->
+      Helpers.top_path(__MODULE__, :top, "invalid")
+    end
+  end
+
   test "top-level named route" do
     assert Helpers.post_path(__MODULE__, :show, 5) == "/posts/5"
     assert Helpers.post_path(__MODULE__, :show, 5, []) == "/posts/5"
@@ -161,13 +134,12 @@ defmodule Phoenix.Router.HelpersTest do
 
     error_message = fn helper, arity ->
       """
-      No helper clause for #{inspect Helpers}.#{helper}/#{arity} defined for action :skip.
-      The following #{helper} actions are defined under your router:
+      no function clause for #{inspect Helpers}.#{helper}/#{arity} and action :skip. The following actions/clauses are supported:
 
-        * :file
-        * :show
+          #{helper}(conn_or_endpoint, :file, file, params \\\\ [])
+          #{helper}(conn_or_endpoint, :show, id, params \\\\ [])
 
-      """ |> String.strip
+      """ |> String.trim
     end
 
     assert_raise UndefinedFunctionError, fn ->
@@ -192,6 +164,14 @@ defmodule Phoenix.Router.HelpersTest do
 
     assert_raise ArgumentError, error_message.("post_url", 4), fn ->
       Helpers.post_url(__MODULE__, :skip, 5, foo: "bar", other: "param")
+    end
+
+    assert_raise ArgumentError, ~r/when building url for Phoenix.Router.HelpersTest.Router/, fn ->
+      Helpers.post_url("oops", :skip, 5, foo: "bar", other: "param")
+    end
+
+    assert_raise ArgumentError, ~r/when building path for Phoenix.Router.HelpersTest.Router/, fn ->
+      Helpers.post_path("oops", :skip, 5, foo: "bar", other: "param")
     end
   end
 
@@ -260,21 +240,16 @@ defmodule Phoenix.Router.HelpersTest do
 
     error_message = fn helper, arity ->
       """
-      No helper clause for #{inspect Helpers}.#{helper}/#{arity} defined for action :skip.
-      The following #{helper} actions are defined under your router:
+      no function clause for #{inspect Helpers}.#{helper}/#{arity} and action :skip. The following actions/clauses are supported:
 
-        * :create
-        * :delete
-        * :edit
-        * :index
-        * :new
-        * :show
-        * :update
-      """ |> String.strip
-    end
-
-    assert_raise ArgumentError, error_message.("user_comment_path", 3), fn ->
-      Helpers.user_comment_path(__MODULE__, :skip, 123)
+          user_comment_file_path(conn_or_endpoint, :create, user_id, comment_id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :delete, user_id, comment_id, id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :edit, user_id, comment_id, id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :index, user_id, comment_id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :new, user_id, comment_id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :show, user_id, comment_id, id, params \\\\ [])
+          user_comment_file_path(conn_or_endpoint, :update, user_id, comment_id, id, params \\\\ [])
+      """ |> String.trim
     end
 
     assert_raise ArgumentError, error_message.("user_comment_file_path", 4), fn ->
@@ -287,18 +262,17 @@ defmodule Phoenix.Router.HelpersTest do
 
     arity_error_message =
       """
-      No helper clause for #{inspect Helpers}.user_comment_path defined for action :show with arity 3.
-      Please check that the function, arity and action are correct.
-      The following user_comment_path actions are defined under your router:
+      no action :show for helper #{inspect Helpers}.user_comment_path/3. The following actions/clauses are supported:
 
-        * :create
-        * :delete
-        * :edit
-        * :index
-        * :new
-        * :show
-        * :update
-      """ |> String.strip
+          user_comment_path(conn_or_endpoint, :create, user_id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :delete, user_id, id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :edit, user_id, id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :index, user_id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :new, user_id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :show, user_id, id, params \\\\ [])
+          user_comment_path(conn_or_endpoint, :update, user_id, id, params \\\\ [])
+
+      """ |> String.trim
 
     assert_raise ArgumentError, arity_error_message, fn ->
       Helpers.user_comment_path(__MODULE__, :show, 123)
@@ -428,6 +402,24 @@ defmodule Phoenix.Router.HelpersTest do
     assert Helpers.url(uri()) == "https://example.com"
   end
 
+  test "phoenix_router_url with string takes precedence over endpoint" do
+    url = "https://phoenixframework.org"
+    conn = Phoenix.Controller.put_router_url(conn_with_endpoint(), url)
+
+    assert Helpers.url(conn) == url
+    assert Helpers.admin_message_url(conn, :show, 1) ==
+      url <> "/admin/new/messages/1"
+  end
+
+  test "phoenix_router_url with URI takes precedence over endpoint" do
+    uri = %URI{scheme: "https", host: "phoenixframework.org", port: 123, path: "/path"}
+    conn = Phoenix.Controller.put_router_url(conn_with_endpoint(), uri)
+
+    assert Helpers.url(conn) == "https://phoenixframework.org:123"
+    assert Helpers.admin_message_url(conn, :show, 1) ==
+      "https://phoenixframework.org:123/admin/new/messages/1"
+  end
+
   test "helpers module generates a path helper" do
     assert Helpers.path(__MODULE__, "/") == "/"
     assert Helpers.path(conn_with_endpoint(), "/") == "/"
@@ -513,5 +505,14 @@ defmodule Phoenix.Router.HelpersTest do
   test "helpers properly encode named and query string params" do
     assert Router.Helpers.post_path(__MODULE__, :show, "my path", foo: "my param") ==
       "/posts/my%20path?foo=my+param"
+  end
+
+  test "duplicate helpers with unique arities" do
+    assert Helpers.product_path(__MODULE__, :show, 123) == "/products/123"
+    assert Helpers.product_path(__MODULE__, :show, 123, foo: "bar") == "/products/123?foo=bar"
+    assert Helpers.product_path(__MODULE__, :show, 123, "asc") == "/products/123/asc"
+    assert Helpers.product_path(__MODULE__, :show, 123, "asc", foo: "bar") == "/products/123/asc?foo=bar"
+    assert Helpers.product_path(__MODULE__, :show, 123, "asc", 1) == "/products/123/asc/1"
+    assert Helpers.product_path(__MODULE__, :show, 123, "asc", 1, foo: "bar") == "/products/123/asc/1?foo=bar"
   end
 end

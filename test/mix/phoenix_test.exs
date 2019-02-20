@@ -26,10 +26,10 @@ defmodule Mix.PhoenixTest do
       "name:text",
       "date_of_birth:date",
       "happy_hour:time",
-      "joined:datetime",
+      "joined:naive_datetime",
       "token:uuid"
     ]
-    assert Mix.Phoenix.attrs(attrs) == [
+    assert Mix.Phoenix.Schema.attrs(attrs) == [
       logins: {:array, :string},
       age: :integer,
       temp: :float,
@@ -39,14 +39,14 @@ defmodule Mix.PhoenixTest do
       name: :text,
       date_of_birth: :date,
       happy_hour: :time,
-      joined: :datetime,
+      joined: :naive_datetime,
       token: :uuid
     ]
   end
 
   test "attrs/1 raises with an unknown type" do
-    assert_raise(Mix.Error, "Unknown type `other` given to generator", fn ->
-      Mix.Phoenix.attrs(["other:other"])
+    assert_raise(Mix.Error, ~r"Unknown type `:other` given to generator", fn ->
+      Mix.Phoenix.Schema.attrs(["other:other"])
     end)
   end
 
@@ -61,23 +61,29 @@ defmodule Mix.PhoenixTest do
       name: :text,
       date_of_birth: :date,
       happy_hour: :time,
-      joined: :datetime,
+      happy_hour_usec: :time_usec,
+      joined: :naive_datetime,
+      joined_utc: :utc_datetime,
+      joined_utc_usec: :utc_datetime_usec,
       token: :uuid,
       other: :other
     ]
-    assert Mix.Phoenix.params(params) == %{
+    assert Mix.Phoenix.Schema.params(params) == %{
       logins: [],
       age: 42,
-      temp: "120.5",
+      temp: 120.5,
       temp_2: "120.5",
       admin: true,
       meta: %{},
-      name: "some content",
-      date_of_birth: %{year: 2010, month: 4, day: 17},
-      happy_hour: %{hour: 14, min: 0, sec: 0},
-      joined: %{year: 2010, month: 4, day: 17, hour: 14, min: 0, sec: 0},
+      name: "some name",
+      date_of_birth: %Date{year: 2010, month: 4, day: 17},
+      happy_hour: %Time{hour: 14, minute: 0, second: 0},
+      happy_hour_usec: %Time{hour: 14, minute: 0, second: 0, microsecond: {0, 6}},
+      joined: %NaiveDateTime{year: 2010, month: 4, day: 17, hour: 14, minute: 0, second: 0},
+      joined_utc: "2010-04-17T14:00:00Z",
+      joined_utc_usec: "2010-04-17T14:00:00.000000Z",
       token: "7488a646-e31f-11e4-aace-600308960662",
-      other: "some content"
+      other: "some other"
     }
   end
 end

@@ -23,7 +23,7 @@ defmodule Phoenix.Endpoint.Instrument do
       ## Examples
 
           instrument :render_view, %{view: "index.html"}, fn ->
-            render conn, "index.html"
+            render(conn, "index.html")
           end
 
       """
@@ -143,7 +143,7 @@ defmodule Phoenix.Endpoint.Instrument do
             unquote(inst).unquote(event)(:start, var!(compile), var!(runtime))
           catch
             kind, error ->
-              Logger.error unquote(error_prefix) <> Exception.format(kind, error)
+              Logger.error [unquote(error_prefix), Exception.format(kind, error, System.stacktrace())]
           end
       end
     end
@@ -156,7 +156,7 @@ defmodule Phoenix.Endpoint.Instrument do
   #     Instr0.my_event(:stop, diff, res0)
   #
   @doc false
-  @spec compile_start_callbacks(term, [module]) :: Macro.t
+  @spec compile_stop_callbacks(term, [module]) :: Macro.t
   def compile_stop_callbacks(event, instrumenters) do
     Enum.map Enum.with_index(instrumenters), fn {inst, index} ->
       error_prefix = "Instrumenter #{inspect inst}.#{event}/3 failed.\n"

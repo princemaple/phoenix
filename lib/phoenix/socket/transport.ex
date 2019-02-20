@@ -1,90 +1,83 @@
 defmodule Phoenix.Socket.Transport do
   @moduledoc """
-  API for building transports.
+  Outlines the Socket <-> Transport communication.
 
-  This module describes what is required to build a Phoenix transport.
-  The transport sits between the socket and channels, forwarding client
-  messages to channels and vice-versa.
+  This module specifies a behaviour that all sockets must implement.
+  `Phoenix.Socket` is just one possible implementation of a socket
+  that multiplexes events over multiple channels. Developers can
+  implement their own sockets as long as they implement the behaviour
+  outlined here.
 
-  A transport is responsible for:
+  Developers interested in implementing custom transports must invoke
+  the socket API defined in this module. This module also provides
+  many conveniences to make it easier to build custom transports.
 
-    * Implementing the transport behaviour
-    * Establishing the socket connection
-    * Handling of incoming messages
-    * Handling of outgoing messages
-    * Managing channels
-    * Providing secure defaults
+  ## Workflow
 
-  ## The transport behaviour
+  Whenever your endpoint starts, it will automatically invoke the
+  `child_spec/1` on each listed socket and start that specification
+  under the endpoint supervisor. For this reason, custom transports
+  that are manually started in the supervision tree must be listed
+  after the endpoint.
 
-  The transport requires two functions:
+  Whenever the transport receives a connection, it should invoke the
+  `c:connect/1` callback with a map of metadata. Different sockets may
+  require different metadatas.
 
-    * `default_config/0` - returns the default transport configuration
-      to be merged when the transport is declared in the socket module
+  If the connection is accepted, the transport can move the connection
+  to another process, if so desires, or keep using the same process. The
+  process responsible for managing the socket should then call `c:init/1`.
 
-    * `handlers/0` - returns a map of handlers. For example, if the
-      transport is implemented via Cowboy, it just need to specify the
-      appropriate Cowboy handler
+  For each message received from the client, the transport must call
+  `c:handle_in/2` on the socket. For each informational message the
+  transport receives, it should call `c:handle_info/2` on the socket.
 
-  ## Socket connections
+  On termination, `c:terminate/2` must be called. A special atom with
+  reason `:closed` can be used to specify that the client terminated
+  the connection.
 
-  Once a connection is established, the transport is responsible
-  for invoking the `Phoenix.Socket.connect/2` callback and acting
-  accordingly. Once connected, the transport should request the
-  `Phoenix.Socket.id/1` and subscribe to the topic if one exists.
-  On subscribed, the transport must be able to handle "disconnect"
-  broadcasts on the given id topic.
+  ## Example
 
-  The `connect/6` function in this module can be used as a
-  convenience or a documentation on such steps.
+  Here is a simple pong socket implementation:
 
-  ## Incoming messages
+      defmodule PingSocket do
+        @behaviour Phoenix.Socket.Transport
 
-  Incoming messages are encoded in whatever way the transport
-  chooses. Those messages must be decoded in the transport into a
-  `Phoenix.Socket.Message` before being forwarded to a channel.
+        def child_spec(opts) do
+          # We won't spawn any process, so let's return a dummy task
+          %{id: Task, start: {Task, :start_link, [fn -> :ok end]}, restart: :transient}
+        end
 
-  Most of those messages are user messages except:
+        def connect(map) do
+          # Callback to retrieve relevant data from the connection.
+          # The map contains options, params, transport and endpoint keys.
+          {:ok, state}
+        end
 
-    * "heartbeat" events in the "phoenix" topic - should just emit
-      an OK reply
-    * "phx_join" on any topic - should join the topic
-    * "phx_leave" on any topic - should leave the topic
+        def init(state) do
+          # Now we are effectively inside the process that maintains the socket.
+          {:ok, state}
+        end
 
-  The function `dispatch/3` can be used to handle these messages.
+        def handle_in({"ping", _opts}, state) do
+          {:reply, :ok, {:text, "pong"}, state}
+        end
 
-  ## Outgoing messages
+        def handle_info(_, state) do
+          {:ok, state}
+        end
 
-  Channels can send two types of message back to a transport:
-  `Phoenix.Socket.Message` and `Phoenix.Socket.Reply`. Those
-  messages are encoded in the channel into a format defined by
-  the transport. That's why transports are required to pass a
-  serializer that abides to the behaviour described in
-  `Phoenix.Transports.Serializer`.
+        def terminate(_reason, _state) do
+          :ok
+        end
+      end
 
-  ## Managing channels
+  It can be mounted in your endpoint like any other socket:
 
-  Because channels are spawned from the transport process, transports
-  must trap exits and correctly handle the `{:EXIT, _, _}` messages
-  arriving from channels, relaying the proper response to the client.
+      socket "/socket", PingSocket, websocket: true, longpoll: true
 
-  The following events are sent by the transport when a channel exits:
-
-    * `"phx_close"` - The channel has exited gracefully
-    * `"phx_error"` - The channel has crashed
-
-  The `on_exit_message/3` function aids in constructing these messages.
-
-  ## Duplicate Join Subscriptions
-
-  For a given topic, the client may only establish a single channel
-  subscription. When attempting to create a duplicate subscription,
-  `dispatch/3` will close the existing channel, log a warning, and
-  spawn a new channel for the topic. When sending the `"phx_close"`
-  event form the closed channel, the message will contain the `ref` the
-  client sent when joining. This allows the client to uniquely identify
-  `"phx_close"` and `"phx_error"` messages when force-closing a channel
-  on duplicate joins.
+  You can now interact with the socket under `/socket/websocket`
+  and `/socket/longpoll`.
 
   ## Security
 
@@ -93,198 +86,123 @@ defmodule Phoenix.Socket.Transport do
 
   The functionality provided by this module helps in performing "origin"
   header checks and ensuring only SSL connections are allowed.
-
-  ## Remote Client
-
-  Channels can reply, synchronously, to any `handle_in/3` event. To match
-  pushes with replies, clients must include a unique `ref` with every
-  message and the channel server will reply with a matching ref where
-  the client can pick up the callback for the matching reply.
-
-  Phoenix includes a JavaScript client for WebSocket and Longpolling
-  support using JSON encodings.
-
-  Clients can be implemented for other protocols and encodings by
-  abiding by the `Phoenix.Socket.Message` format.
-
-  ## Protocol Versioning
-
-  Clients are expected to send the Channel Transport protocol version that they
-  expect to be talking to. The version can be retrieved on the server from
-  `Phoenix.Channel.Transport.protocol_version/0`. If no version is provided, the
-  Transport adapters should default to assume a `"1.0.0"` version number.
-  See `web/static/js/phoenix.js` for an example transport client
-  implementation.
   """
+
+  @type state :: term()
+
+  @doc """
+  Returns a child specification for socket management.
+
+  This is invoked only once per socket regardless of
+  the number of transports and should be responsible
+  for setting up any process structure used exclusively
+  by the socket regardless of transports.
+
+  Each socket connection is started by the transport
+  and the process that controls the socket likely
+  belongs to the transport. However, some sockets spawn
+  new processes, such as `Phoenix.Socket` which spawns
+  channels, and this gives the ability to start a
+  supervision tree associated to the socket.
+
+  It receives the socket options from the endpoint,
+  for example:
+
+      socket "/my_app", MyApp.Socket, shutdown: 5000
+
+  means `child_spec([shutdown: 5000])` will be invoked.
+  """
+  @callback child_spec(keyword) :: :supervisor.child_spec
+
+  @doc """
+  Connects to the socket.
+
+  The transport passes a map of metadata and the socket
+  returns `{:ok, state}` or `:error`. The state must be
+  stored by the transport and returned in all future
+  operations.
+
+  This function is used for authorization purposes and it
+  may be invoked outside of the process that effectively
+  runs the socket.
+
+  In the default `Phoenix.Socket` implementation, the
+  metadata expects the following keys:
+
+    * `:endpoint` - the application endpoint
+    * `:transport` - the transport name
+    * `:params` - the connection parameters
+    * `:options` - a keyword list of transport options, often
+      given by developers when configuring the transport.
+      It must include a `:serializer` field with the list of
+      serializers and their requirements
+
+  """
+  @callback connect(transport_info :: map) :: {:ok, state} | :error
+
+  @doc """
+  Initializes the socket state.
+
+  This must be executed from the process that will effectively
+  operate the socket.
+  """
+  @callback init(state) :: {:ok, state}
+
+  @doc """
+  Handles incoming socket messages.
+
+  The message is represented as `{payload, options}`. It must
+  return one of:
+
+    * `{:ok, state}` - continues the socket with no reply
+    * `{:reply, status, reply, state}` - continues the socket with reply
+    * `{:stop, reason, state}` - stops the socket
+
+  The `reply` is a tuple contain an `opcode` atom and a message that can
+  be any term. The built-in websocket transport supports both `:text` and
+  `:binary` opcode and the message must be always iodata. Long polling only
+  supports text opcode.
+  """
+  @callback handle_in({message :: term, opts :: keyword}, state) ::
+              {:ok, state}
+              | {:reply, :ok | :error, {opcode :: atom, message :: term}, state}
+              | {:stop, reason :: term, state}
+
+  @doc """
+  Handles info messages.
+
+  The message is a term. It must return one of:
+
+    * `{:ok, state}` - continues the socket with no reply
+    * `{:push, reply, state}` - continues the socket with reply
+    * `{:stop, reason, state}` - stops the socket
+
+  The `reply` is a tuple contain an `opcode` atom and a message that can
+  be any term. The built-in websocket transport supports both `:text` and
+  `:binary` opcode and the message must be always iodata. Long polling only
+  supports text opcode.
+  """
+  @callback handle_info(message :: term, state) ::
+              {:ok, state}
+              | {:push, {opcode :: atom, message :: term}, state}
+              | {:stop, reason :: term, state}
+
+  @doc """
+  Invoked on termination.
+
+  If `reason` is `:closed`, it means the client closed the socket.
+  """
+  @callback terminate(reason :: term, state) :: :ok
 
   require Logger
-  alias Phoenix.Socket
-  alias Phoenix.Socket.Message
-  alias Phoenix.Socket.Reply
-
-  @protocol_version "1.0.0"
-  @client_vsn_requirements "~> 1.0"
 
   @doc """
-  Provides a keyword list of default configuration for socket transports.
+  Runs the code reloader if enabled.
   """
-  @callback default_config() :: Keyword.t
-
-  @doc """
-  Returns the Channel Transport protocol version.
-  """
-  def protocol_version, do: @protocol_version
-
-  @doc """
-  Handles the socket connection.
-
-  It builds a new `Phoenix.Socket`, invokes the handler
-  `connect/2` callback and returns the result.
-
-  If the connection was successful, generates `Phoenix.PubSub`
-  topic from the `id/1` callback.
-  """
-  def connect(endpoint, handler, transport_name, transport, serializer, params) do
-    vsn = params["vsn"] || "1.0.0"
-
-    if Version.match?(vsn, @client_vsn_requirements) do
-      connect_vsn(endpoint, handler, transport_name, transport, serializer, params)
-    else
-      Logger.error "The client's requested channel transport version \"#{vsn}\" " <>
-                   "does not match server's version requirements of \"#{@client_vsn_requirements}\""
-      :error
-    end
-  end
-  defp connect_vsn(endpoint, handler, transport_name, transport, serializer, params) do
-    socket = %Socket{endpoint: endpoint,
-                     transport: transport,
-                     transport_pid: self(),
-                     transport_name: transport_name,
-                     handler: handler,
-                     pubsub_server: endpoint.__pubsub_server__,
-                     serializer: serializer}
-
-    case handler.connect(params, socket) do
-      {:ok, socket} ->
-        case handler.id(socket) do
-          nil                   -> {:ok, socket}
-          id when is_binary(id) -> {:ok, %Socket{socket | id: id}}
-          invalid               ->
-            Logger.error "#{inspect handler}.id/1 returned invalid identifier #{inspect invalid}. " <>
-                         "Expected nil or a string."
-            :error
-        end
-
-      :error ->
-        :error
-
-      invalid ->
-        Logger.error "#{inspect handler}.connect/2 returned invalid value #{inspect invalid}. " <>
-                     "Expected {:ok, socket} or :error"
-        :error
-    end
-  end
-
-  @doc """
-  Dispatches `Phoenix.Socket.Message` to a channel.
-
-  All serialized, remote client messages should be deserialized and
-  forwarded through this function by adapters.
-
-  The following returns must be handled by transports:
-
-    * `:noreply` - Nothing to be done by the transport
-    * `{:reply, reply}` - The reply to be sent to the client
-    * `{:joined, channel_pid, reply}` - The channel was joined
-      and the reply must be sent as result
-    * `{:error, reason, reply}` - An error occurred and the reply
-      must be sent as result
-
-  ## Parameter filtering on join
-
-  When logging parameters, Phoenix can filter out sensitive parameters
-  such as passwords and tokens. Parameters to be filtered can be added
-  via the `:filter_parameters` option:
-
-      config :phoenix, :filter_parameters, ["password", "secret"]
-
-  With the configuration above, Phoenix will filter any parameter
-  that contains the terms `password` or `secret`. The match is
-  case sensitive.
-
-  Phoenix's default is `["password"]`.
-
-  """
-  def dispatch(msg, channels, socket)
-
-  def dispatch(%{ref: ref, topic: "phoenix", event: "heartbeat"}, _channels, _socket) do
-    {:reply, %Reply{ref: ref, topic: "phoenix", status: :ok, payload: %{}}}
-  end
-
-  def dispatch(%Message{} = msg, channels, socket) do
-    channels
-    |> Map.get(msg.topic)
-    |> do_dispatch(msg, socket)
-  end
-
-  defp do_dispatch(nil, %{event: "phx_join", topic: topic} = msg, socket) do
-    if channel = socket.handler.__channel__(topic, socket.transport_name) do
-      socket = %Socket{socket | topic: topic, channel: channel}
-
-      case Phoenix.Channel.Server.join(socket, msg.payload) do
-        {:ok, response, pid} ->
-          log_info topic, fn -> "Replied #{topic} :ok" end
-          {:joined, pid, %Reply{ref: msg.ref, topic: topic, status: :ok, payload: response}}
-
-        {:error, reason} ->
-          log_info topic, fn -> "Replied #{topic} :error" end
-          {:error, reason, %Reply{ref: msg.ref, topic: topic, status: :error, payload: reason}}
-      end
-    else
-      reply_ignore(msg, socket)
-    end
-  end
-
-  defp do_dispatch(pid, %{event: "phx_join"} = msg, socket) when is_pid(pid) do
-    Logger.debug "Duplicate channel join for topic \"#{msg.topic}\" in #{inspect(socket.handler)}. " <>
-                 "Closing existing channel for new join."
-    :ok = Phoenix.Channel.Server.close(pid)
-    do_dispatch(nil, msg, socket)
-  end
-
-  defp do_dispatch(nil, msg, socket) do
-    reply_ignore(msg, socket)
-  end
-
-  defp do_dispatch(channel_pid, msg, _socket) do
-    send(channel_pid, msg)
-    :noreply
-  end
-
-  defp log_info("phoenix" <> _, _func), do: :noop
-  defp log_info(_topic, func), do: Logger.info(func)
-
-  defp reply_ignore(msg, socket) do
-    Logger.warn fn -> "Ignoring unmatched topic \"#{msg.topic}\" in #{inspect(socket.handler)}" end
-    {:error, :unmatched_topic, %Reply{ref: msg.ref, topic: msg.topic, status: :error,
-                                      payload: %{reason: "unmatched topic"}}}
-  end
-
-  @doc """
-  Returns the message to be relayed when a channel exits.
-  """
-  # TODO remove 2-arity on next major release
-  def on_exit_message(topic, reason) do
-    IO.write :stderr, "Phoenix.Transport.on_exit_message/2 is deprecated. Use on_exit_message/3 instead."
-    on_exit_message(topic, nil, reason)
-  end
-  def on_exit_message(topic, join_ref, reason) do
-    case reason do
-      :normal        -> %Message{ref: join_ref, topic: topic, event: "phx_close", payload: %{}}
-      :shutdown      -> %Message{ref: join_ref, topic: topic, event: "phx_close", payload: %{}}
-      {:shutdown, _} -> %Message{ref: join_ref, topic: topic, event: "phx_close", payload: %{}}
-      _              -> %Message{ref: join_ref, topic: topic, event: "phx_error", payload: %{}}
-    end
+  def code_reload(conn, endpoint, opts) do
+    reload? = Keyword.get(opts, :code_reloader, endpoint.config(:code_reloader))
+    reload? && Phoenix.CodeReloader.reload!(endpoint)
+    conn
   end
 
   @doc """
@@ -293,7 +211,7 @@ defmodule Phoenix.Socket.Transport do
   Uses the endpoint configuration to decide so. It is a
   noop if the connection has been halted.
   """
-  def force_ssl(%Plug.Conn{halted: true} = conn, _socket, _endpoint, _opts) do
+  def force_ssl(%{halted: true} = conn, _socket, _endpoint, _opts) do
     conn
   end
 
@@ -310,7 +228,7 @@ defmodule Phoenix.Socket.Transport do
       opts =
         if force_ssl = Keyword.get(opts, :force_ssl, endpoint.config(:force_ssl)) do
           force_ssl
-          |> Keyword.put_new(:host, endpoint.config(:url)[:host] || "localhost")
+          |> Keyword.put_new(:host, {endpoint, :host, []})
           |> Plug.SSL.init()
         end
       {:cache, opts}
@@ -347,17 +265,21 @@ defmodule Phoenix.Socket.Transport do
 
   def check_origin(conn, handler, endpoint, opts, sender) do
     import Plug.Conn
-    origin       = get_req_header(conn, "origin") |> List.first
+    origin       = conn |> get_req_header("origin") |> List.first()
     check_origin = check_origin_config(handler, endpoint, opts)
 
     cond do
       is_nil(origin) or check_origin == false ->
         conn
+
       origin_allowed?(check_origin, URI.parse(origin), endpoint) ->
         conn
+
       true ->
         Logger.error """
         Could not check origin for Phoenix.Socket transport.
+
+        Origin of the request: #{origin}
 
         This happens when you are attempting a socket connection to
         a different host than the one configured in your config/
@@ -375,11 +297,63 @@ defmodule Phoenix.Socket.Transport do
 
                 check_origin: ["https://example.com",
                                "//another.com:888", "//other.com"]
+
         """
         resp(conn, :forbidden, "")
         |> sender.()
         |> halt()
     end
+  end
+
+  @doc """
+  Extracts connection information from `conn` and returns a map.
+
+  Keys are retrieved from the optional transport option `:connect_info`.
+  This functionality is transport specific. Please refer to your transports'
+  documentation for more information.
+
+  The supported keys are:
+
+    * `:peer_data` - the result of `Plug.Conn.get_peer_data/1`
+    * `:x_headers` - a list of all request headers that have an "x-" prefix
+    * `:uri` - a `%URI{}` derived from the conn
+
+  """
+  def connect_info(conn, keys) do
+    for key <- keys, into: %{} do
+      case key do
+        :peer_data ->
+          {:peer_data, Plug.Conn.get_peer_data(conn)}
+
+        :x_headers ->
+          {:x_headers, fetch_x_headers(conn)}
+
+        :uri ->
+          {:uri, fetch_uri(conn)}
+
+        {key, val} -> {key, val}
+
+        _ ->
+          raise ArgumentError, ":connect_info keys are expected to be one of :peer_data, :x_headers, or :uri, optionally followed by custom keyword pairs, got: #{inspect(key)}"
+      end
+    end
+  end
+
+  defp fetch_x_headers(conn) do
+    for {header, _} = pair <- conn.req_headers,
+        String.starts_with?(header, "x-"),
+        do: pair
+  end
+
+  defp fetch_uri(%{host: host, scheme: scheme, query_string: query_string, port: port, request_path: request_path}) do
+    %URI{
+      scheme: to_string(scheme),
+      query: query_string,
+      port: port,
+      host: host,
+      authority: host,
+      path: request_path,
+    }
   end
 
   defp check_origin_config(handler, endpoint, opts) do
@@ -388,9 +362,17 @@ defmodule Phoenix.Socket.Transport do
         case Keyword.get(opts, :check_origin, endpoint.config(:check_origin)) do
           origins when is_list(origins) ->
             Enum.map(origins, &parse_origin/1)
+
           boolean when is_boolean(boolean) ->
             boolean
+
+          {module, function, arguments} ->
+            {module, function, arguments}
+
+          invalid ->
+            raise ArgumentError, ":check_origin expects a boolean, list of hosts, or MFA tuple, got: #{inspect(invalid)}"
         end
+
       {:cache, check_origin}
     end)
   end
@@ -399,16 +381,21 @@ defmodule Phoenix.Socket.Transport do
     case URI.parse(origin) do
       %{host: nil} ->
         raise ArgumentError,
-          "invalid check_origin: #{inspect origin} (expected an origin with a host)"
+          "invalid :check_origin option: #{inspect origin}. " <>
+          "Expected an origin with a host that is parsable by URI.parse/1. For example: " <>
+          "[\"https://example.com\", \"//another.com:888\", \"//other.com\"]"
+
       %{scheme: scheme, port: port, host: host} ->
         {scheme, host, port}
     end
   end
 
-  defp origin_allowed?(_check_origin, %URI{host: nil}, _endpoint),
-    do: true
+  defp origin_allowed?({module, function, arguments}, uri, _endpoint),
+    do: apply(module, function, [uri | arguments])
+  defp origin_allowed?(_check_origin, %{host: nil}, _endpoint),
+    do: false
   defp origin_allowed?(true, uri, endpoint),
-    do: compare?(uri.host, endpoint.config(:url)[:host])
+    do: compare?(uri.host, host_to_binary(endpoint.config(:url)[:host]))
   defp origin_allowed?(check_origin, uri, _endpoint) when is_list(check_origin),
     do: origin_allowed?(uri, check_origin)
 
@@ -432,4 +419,8 @@ defmodule Phoenix.Socket.Transport do
     do: String.ends_with?(request_host, allowed_host)
   defp compare_host?(request_host, allowed_host),
     do: request_host == allowed_host
+
+  # TODO: Deprecate {:system, env_var} once we require Elixir v1.7+
+  defp host_to_binary({:system, env_var}), do: host_to_binary(System.get_env(env_var))
+  defp host_to_binary(host), do: host
 end

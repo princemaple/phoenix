@@ -1,5 +1,5 @@
 defmodule Phoenix.Router.Scope do
-  alias Phoenix.Router.Scope
+  alias Phoenix.Router.{Scope, Route}
   @moduledoc false
 
   @stack :phoenix_router_scopes
@@ -18,7 +18,7 @@ defmodule Phoenix.Router.Scope do
   @doc """
   Builds a route based on the top of the stack.
   """
-  def route(module, kind, verb, path, plug, plug_opts, opts) do
+  def route(line, module, kind, verb, path, plug, plug_opts, opts) do
     path    = validate_path(path)
     private = Keyword.get(opts, :private, %{})
     assigns = Keyword.get(opts, :assigns, %{})
@@ -26,17 +26,16 @@ defmodule Phoenix.Router.Scope do
 
     {path, host, alias, as, pipes, private, assigns} =
       join(module, path, plug, as, private, assigns)
-    Phoenix.Router.Route.build(kind, verb, path, host, alias, plug_opts, as, pipes, private, assigns)
+    Phoenix.Router.Route.build(line, kind, verb, path, host, alias, plug_opts, as, pipes, private, assigns)
   end
 
   @doc """
   Validates a path is a string and contains a leading prefix.
   """
-
   def validate_path("/" <> _ = path), do: path
   def validate_path(path) when is_binary(path) do
-    IO.write :stderr, """
-    warning: router paths should begin with a forward slash, got: #{inspect path}
+    IO.warn """
+    router paths should begin with a forward slash, got: #{inspect path}
     #{Exception.format_stacktrace}
     """
 
@@ -56,13 +55,27 @@ defmodule Phoenix.Router.Scope do
   @doc """
   Appends the given pipes to the current scope pipe through.
   """
-  def pipe_through(module, pipes) do
-    pipes = List.wrap(pipes)
+  def pipe_through(module, new_pipes) do
+    new_pipes = List.wrap(new_pipes)
+    stack_pipes =
+      module
+      |> get_stack()
+      |> Enum.flat_map(fn scope -> scope.pipes end)
 
-    update_stack(module, fn [scope|stack] ->
-      scope = put_in scope.pipes, scope.pipes ++ pipes
-      [scope|stack]
+    update_stack(module, fn [scope | stack] ->
+      pipes = collect_pipes(new_pipes, stack_pipes, scope.pipes)
+      [put_in(scope.pipes, pipes) | stack]
     end)
+  end
+  defp collect_pipes([] = _new_pipes, _stack_pipes, acc), do: acc
+  defp collect_pipes([pipe | new_pipes], stack_pipes, acc) do
+    if pipe in new_pipes or pipe in stack_pipes do
+      raise ArgumentError, """
+      duplicate pipe_through for #{inspect pipe}.
+      A plug may only be used once inside a scoped pipe_through
+      """
+    end
+    collect_pipes(new_pipes, stack_pipes, acc ++ [pipe])
   end
 
   @doc """
@@ -75,7 +88,7 @@ defmodule Phoenix.Router.Scope do
   def push(module, opts) when is_list(opts) do
     path = with path when not is_nil(path) <- Keyword.get(opts, :path),
                 path <- validate_path(path),
-                do: Plug.Router.Utils.split(path)
+                do: String.split(path, "/", trim: true)
 
     alias = Keyword.get(opts, :alias)
     alias = alias && Atom.to_string(alias)
@@ -99,9 +112,35 @@ defmodule Phoenix.Router.Scope do
   end
 
   @doc """
-  Returns true if the module's definition is currently within a scope block
+  Returns true if the module's definition is currently within a scope block.
   """
   def inside_scope?(module), do: length(get_stack(module)) > 1
+
+  @doc """
+  Add a forward to the router.
+  """
+  def register_forwards(module, path, plug) when is_atom(plug) do
+    plug = expand_alias(module, plug)
+    phoenix_forwards = Module.get_attribute(module, :phoenix_forwards)
+    path_segments = Route.forward_path_segments(path, plug, phoenix_forwards)
+    phoenix_forwards = Map.put(phoenix_forwards, plug, path_segments)
+    Module.put_attribute(module, :phoenix_forwards, phoenix_forwards)
+    plug
+  end
+
+  def register_forwards(_, _, plug) do
+    raise ArgumentError, "forward expects a module as the second argument, #{inspect plug} given"
+  end
+
+  defp expand_alias(module, alias) do
+    if inside_scope?(module) do
+      module
+      |> get_stack()
+      |> join_alias(alias)
+    else
+      alias
+    end
+  end
 
   defp join(module, path, alias, as, private, assigns) do
     stack = get_stack(module)
@@ -112,7 +151,7 @@ defmodule Phoenix.Router.Scope do
 
   defp join_path(stack, path) do
     "/" <>
-      ([Plug.Router.Utils.split(path)|extract(stack, :path)]
+      ([String.split(path, "/", trim: true) | extract(stack, :path)]
        |> Enum.reverse()
        |> Enum.concat()
        |> Enum.join("/"))
