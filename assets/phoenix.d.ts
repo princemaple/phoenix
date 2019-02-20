@@ -21,10 +21,10 @@ declare module 'phoenix' {
     push(event: string, payload: Object, timeout?: Timeout): Push;
     leave(timeout?: Timeout): Push;
 
-    onClose(callback: (...args: any[]) => any);
-    onError(callback: (...args: any[]) => any);
+    onClose(callback: Function);
+    onError(callback: Function);
 
-    on(event: string, callback: (...args: any[]) => void): Ref;
+    on(event: string, callback: Function): Ref;
     off(event: string, ref: Ref);
 
     onMessage(event: string, payload: Object, ref: Ref): Object;
